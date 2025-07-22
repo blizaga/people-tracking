@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  # Database service
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: people_tracking
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # API service
+  api:
+    build: .
+    command: uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/people_tracking
+      - PYTHONPATH=/app
+    volumes:
+      - .:/app
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Video Pipeline service
+  pipeline:
+    build: .
+    command: uv run python scripts/run_pipeline.py
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/people_tracking
+      - PYTHONPATH=/app
+      - DISPLAY=${DISPLAY:-:0}
+    volumes:
+      - .:/app
+      - ./data:/app/data
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    network_mode: host  # For X11 display
+    
+  # Live Video Pipeline service (optional)
+  pipeline-live:
+    build: .
+    command: uv run python scripts/test_live_video.py
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/people_tracking
+      - PYTHONPATH=/app
+      - DISPLAY=${DISPLAY:-:0}
+    volumes:
+      - .:/app
+      - ./data:/app/data
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /dev/video0:/dev/video0  # Camera access
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    network_mode: host
+    privileged: true  # For camera access
+    profiles:
+      - live  # Only start with --profile live
+
+  # Database migration service
+  migrate:
+    build: .
+    command: uv run alembic upgrade head
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/people_tracking
+      - PYTHONPATH=/app
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - migration  # Only start with --profile migration
+
+volumes:
+  postgres_data:
