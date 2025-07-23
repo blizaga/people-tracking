@@ -25,19 +25,30 @@ def set_area(config: PolygonAreaConfig, db: Session = Depends(get_db)):
     if not config.area_id:
         config.area_id = str(uuid.uuid4())
         # Buat area baru dengan UUID yang di-generate
-        area = Area(id=config.area_id, name=config.name, polygon=config.polygon)
+        area = Area(
+            id=config.area_id, 
+            name=config.name, 
+            coordinates=config.polygon,  # Fill legacy field
+            polygon=config.polygon       # Fill new field
+        )
         db.add(area)
     else:
         # Cari area berdasarkan area_id yang diberikan
         area = db.query(Area).filter_by(id=config.area_id).first()
         if not area:
             # Buat baru dengan area_id yang diberikan
-            area = Area(id=config.area_id, name=config.name, polygon=config.polygon)
+            area = Area(
+                id=config.area_id, 
+                name=config.name, 
+                coordinates=config.polygon,  # Fill legacy field
+                polygon=config.polygon       # Fill new field
+            )
             db.add(area)
         else:
             # Update area yang sudah ada
             area.name = config.name
-            area.polygon = config.polygon
+            area.coordinates = config.polygon  # Update legacy field
+            area.polygon = config.polygon      # Update new field
     
     db.commit()
     return {

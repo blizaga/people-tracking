@@ -1,202 +1,331 @@
-# People-Tracking
+# People Tracking System
 
-Real-time people detection and tracking system using YOLO and DeepSORT with dynamic polygon configuration.
+A real-time system for detecting and counting people using computer vision with YOLO11 and DeepSORT tracking.
 
-## Features
+## Checklist Requirements Technical Test
+- [ Done ] Database Design
+- [ Done ] Video Dataset Collection
+- [ Done ] Object Detection and Tracking
+- [ Done ] Counting and Polygon Area Management
+- [ Done ] Prediction (Forecasting)
+- [ Done ] API Integration for Configuration and Monitoring
+- [ Done ] Deployment
 
-- Real-time people detection using YOLOv11
-- Object tracking with DeepSORT
-- Dynamic polygon area configuration via API
-- Auto-refresh polygon from database
-- RESTful API for configuration and statistics
-- Containerized deployment with Docker
+## 🎯 Main Features
 
-## Quick Start with Docker
+- **Real-time Detection**: Detect people using YOLO11
+- **Object Tracking**: Multi-object tracking with DeepSORT
+- **Area-based Counting**: Count people entering/exiting polygon areas
+- **REST API**: Configuration and monitoring via API
+- **Dynamic Configuration**: Update detection areas in real-time
 
-### Prerequisites
+## 🗄️ Database Design
 
-- Docker and Docker Compose
-- Git
+### ERD (Entity Relationship Diagram)
 
-### 1. Clone and Setup
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│     AREAS       │    │   DETECTIONS    │    │    COUNTERS     │
+├─────────────────┤    ├─────────────────┤    ├─────────────────┤
+│ id (UUID) PK    │◄──┐│ id (BIGINT) PK  │    │ id (BIGINT) PK  │
+│ name (VARCHAR)  │   ││ tracking_id     │    │ area_id (UUID)  │◄─┐
+│ coordinates*    │   ││ area_id (UUID)  │────┘│ in_count (INT)  │  │
+│ polygon (JSON)  │   ││ frame_time      │     │ out_count (INT) │  │
+│ created_at      │   ││ bbox (JSON)     │     │ updated_at      │  │
+│ updated_at      │   ││ entered (BOOL)  │     └─────────────────┘  │
+└─────────────────┘   ││ created_at      │                        │
+                      │└─────────────────┘                        │
+                      └───────────────────────────────────────────┘
+
+Relationships:
+- AREAS (1) ←→ (N) DETECTIONS (area_id)
+- AREAS (1) ←→ (1) COUNTERS (area_id)
+```
+
+### Database Schema
+
+```sql
+-- Table: areas (Definisi area deteksi)
+CREATE TABLE areas (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR NOT NULL,
+    coordinates JSON NOT NULL,  -- Legacy field
+    polygon JSON,               -- Koordinat polygon area
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE
+);
+
+-- Table: detections (Record setiap deteksi)
+CREATE TABLE detections (
+    id BIGSERIAL PRIMARY KEY,
+    tracking_id VARCHAR NOT NULL,
+    area_id UUID REFERENCES areas(id) ON DELETE CASCADE,
+    frame_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    bbox JSON NOT NULL,         -- Bounding box {x, y, w, h}
+    entered BOOLEAN NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Table: counters (Agregasi counting per area)
+CREATE TABLE counters (
+    id BIGSERIAL PRIMARY KEY,
+    area_id UUID REFERENCES areas(id) ON DELETE CASCADE UNIQUE,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    in_count INTEGER DEFAULT 0,
+    out_count INTEGER DEFAULT 0
+);
+```
+
+## 🎥 Dataset Video
+
+### Dataset Open-Source
+
+**Rekomendasi dataset untuk testing:**
+
+1. **Pedestrian Video Dataset Kaggle**
+   - Multiple Object Tracking benchmark
+   - Download: https://www.kaggle.com/datasets/dsptlp/pedestrians-videos
+   - Format: MP4, annotations tersedia
+
+
+### Video Source Configuration
 
 ```bash
+# File video statis
+VIDEO_SOURCE_TYPE=static
+VIDEO_SOURCE_PATH=data/videos/test-1.mp4
+
+```
+
+## 🤖 Worker Detector
+
+### Arsitektur Detection Pipeline
+
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│ Video Input │───►│ YOLO11      │───►│ DeepSORT    │───►│ Polygon     │
+│             │    │ Detection   │    │ Tracking    │    │ Check       │
+└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+                           │                  │                  │
+                           ▼                  ▼                  ▼
+                   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+                   │ Person      │    │ Track ID    │    │ Count       │
+                   │ Detection   │    │ Assignment  │    │ Update      │
+                   └─────────────┘    └─────────────┘    └─────────────┘
+```
+
+### Core Components
+
+1. **YOLO11 Detection**
+   ```python
+   model = YOLO("yolo11n.pt")
+   results = model(frame, verbose=False)[0]
+   
+   # Filter person class (class_id = 0)
+   for box in results.boxes:
+       if int(box.cls[0]) == 0:  # person
+           detections.append(([x1, y1, w, h], confidence, "person"))
+   ```
+
+2. **DeepSORT Tracking**
+   ```python
+   tracker = DeepSort(max_age=30, n_init=3, max_cosine_distance=0.2)
+   tracks = tracker.update_tracks(detections, frame=frame)
+   ```
+
+3. **Polygon Area Detection**
+   ```python
+   inside = is_inside_polygon(polygon_area, (center_x, center_y))
+   if inside and track_not_seen_before:
+       counter.in_count += 1
+   ```
+
+
+## 🚀 Quick Start
+
+### 1. Installation
+
+```bash
+# Clone repository
 git clone <repository-url>
 cd people-tracking
+
+# Setup virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### 2. Database Setup
+
+```bash
+# Create PostgreSQL database
+sudo -u postgres createdb people_tracking
+
+# Configure environment
 cp .env.example .env
+# Edit DATABASE_URL in .env
+
+# Run migrations
+alembic upgrade head
 ```
 
-### 2. Build and Start Services
+### 3. Setup Initial Area
 
 ```bash
-# Build Docker images
-make build
-
-# Start API and database
-make up
-
-# Run migrations and setup initial areas
-make setup
+# Create default detection areas
+python scripts/setup_initial.py
 ```
 
-### 3. Run Video Pipeline
+### 4. Running API Server
 
 ```bash
-# For video file processing
-make pipeline
+# Start FastAPI server
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
-# For live webcam (optional)
-make live
+# API Documentation
+http://localhost:8000/docs
 ```
 
-### 4. Access Services
-
-- **API Documentation**: http://localhost:8000/docs
-- **API Health Check**: http://localhost:8000/
-- **PostgreSQL**: localhost:5432
-
-## Available Commands
+### 5. Running Detection Pipeline
 
 ```bash
-make help          # Show all available commands
-make build         # Build Docker images
-make up            # Start API and database services
-make pipeline      # Start video pipeline service
-make live          # Start live video pipeline service
-make migrate       # Run database migrations
-make setup         # Setup initial database and area configuration
-make logs          # Show logs from all services
-make down          # Stop all services
-make clean         # Clean up containers and volumes
-make dev           # Development mode with auto-reload
+# Start people detection
+python scripts/run_pipeline.py
+
+# Press 'q' to quit
 ```
 
-## API Endpoints
+## 🔧 API Endpoints
 
-### Configure Detection Area
+### Setup Detection Area
 
-**POST** `/api/config/area`
+```bash
+POST /api/config/area
+Content-Type: application/json
 
-```json
 {
-    "area_id": "4aeb238c-be39-4c1b-8c9f-828669dddf62",
-    "name": "Pedestrian Crossing Area",
-    "polygon": [[300, 400], [900, 400], [1000, 720], [200, 720]]
-}
-```
-
-Or create with auto-generated ID:
-
-```json
-{
-    "name": "New Crossing Area",
-    "polygon": [[300, 400], [900, 400], [1000, 720], [200, 720]]
+  "name": "Main Entrance",
+  "polygon": [[300, 400], [900, 400], [1000, 720], [200, 720]]
 }
 ```
 
 ### Get Statistics
 
-**GET** `/api/stats/` - Historical data
-**GET** `/api/stats/live` - Live counters
+```bash
+GET /api/stats?area_id=<area-id>
 
-## Development
+# Response:
+{
+  "area_id": "uuid",
+  "area_name": "Main Entrance", 
+  "total_detections": 45,
+  "in_count": 23,
+  "out_count": 22,
+  "last_updated": "2025-07-23T10:30:00Z"
+}
+```
 
-### Local Development (without Docker)
+## 📸 Visual Examples
+
+### Polygon Area Configuration
+
+Below is a visual example of how the system detects and tracks people within a configured polygon area:
+
+#### Before: Initial Detection with Person Tracking
+![Before - Person Detection](./images/people_tracking.png)
+
+*The image illustrates the system detecting people (green bounding boxes) with tracking IDs and a blue polygon area that has been configured.*
+
+#### After: Adjusted Polygon Area for Better Coverage  
+![After - Adjusted Polygon](./images/dynamic_polygon_with_api.png)
+
+*After adjusting the polygon area via the API, the detection area (green polygon) is expanded for better coverage.*
+
+### Key Features Demonstrated:
+
+1. **Real-time Person Detection**: Green bounding boxes indicate detected individuals with confidence scores.
+2. **Tracking ID Assignment**: Each person is assigned a unique tracking ID (e.g., ID:5).
+3. **Polygon Area Visualization**: 
+    - **Blue**: Initial polygon area.
+    - **Green**: Adjusted polygon area after API updates.
+4. **Coordinate Display**: The bottom-left corner displays mouse coordinates and RGB values.
+5. **Dynamic Area Updates**: Polygon areas can be updated in real-time without restarting the system.
+
+### API Usage for Polygon Adjustment:
 
 ```bash
-# Install dependencies
-uv sync
+# Initial polygon setup
+curl -X POST http://localhost:8000/api/config/area \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Pedestrian Crossing Area", 
+    "polygon": [[300, 400], [900, 400], [1000, 720], [200, 720]]
+  }'
 
-# Setup environment
-cp .env.example .env
-
-# Run migrations
-uv run alembic upgrade head
-
-# Setup initial areas
-uv run python scripts/setup_initial.py
-
-# Start API
-uv run uvicorn app.main:app --reload
-
-# Run video pipeline
-uv run python scripts/run_pipeline.py
+# Adjusted polygon for better coverage
+curl -X POST http://localhost:8000/api/config/area \
+  -H "Content-Type: application/json" \
+  -d '{
+    "area_id": "existing-area-id",
+    "name": "Pedestrian Crossing Area",
+    "polygon": [[250, 350], [950, 350], [1050, 750], [150, 750]]
+  }'
 ```
+
+## 📊 Testing
+
+### Video File Test
+
+```bash
+# Test dengan file video
+python scripts/test_video.py
+```
+
+## ⚙️ Configuration
+
+### Environment Variables
+
+```bash
+# Database
+DATABASE_URL=postgresql://user:password@localhost:5432/people_tracking
+
+# Video Source
+VIDEO_SOURCE_TYPE=static
+VIDEO_SOURCE_PATH=data/videos/test-1.mp4
+```
+
+### Tuning Detection Parameters
+
+```python
+# app/workers/detector.py
+tracker = DeepSort(
+    max_age=30,              # Track memory (frames)
+    n_init=3,                # Confirmations required
+    max_cosine_distance=0.2, # Tracking sensitivity
+    nn_budget=100            # Memory budget
+)
+```
+
+## 🛠️ Development
 
 ### Project Structure
 
 ```
+people-tracking/
 ├── app/
-│   ├── api/v1/endpoints/     # API endpoints
-│   ├── core/                 # Core configuration
-│   ├── models/               # Database models
-│   ├── schemas/              # Pydantic schemas
-│   ├── services/             # Business logic services
-│   ├── utils/                # Utility functions
-│   └── workers/              # Background workers
+│   ├── api/v1/endpoints/     # API routes
+│   ├── core/                 # Configuration & database
+│   ├── models/               # SQLAlchemy models
+│   ├── schemas/              # Pydantic schemas  
+│   ├── services/             # Business logic
+│   ├── utils/                # Utilities
+│   └── workers/              # Detection worker
 ├── alembic/                  # Database migrations
-├── data/videos/              # Video files
+├── data/videos/              # Test videos
 ├── scripts/                  # Utility scripts
-└── docker-compose.yml        # Container orchestration
+└── requirements.txt
 ```
 
-## Configuration
-
-### Environment Variables
-
-Create `.env` file from `.env.example`:
-
-```bash
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/people_tracking
-VIDEO_SOURCE=data/videos/test-1.mp4  # or 0 for webcam
-YOLO_MODEL=yolo11n.pt
-REFRESH_INTERVAL=10
-```
-
-### Dynamic Area Configuration
-
-Areas can be configured dynamically via:
-
-1. **API**: POST to `/api/config/area`
-2. **Database**: Direct insertion to `areas` table
-3. **Startup Script**: Modify `scripts/setup_initial.py`
-
-The detection pipeline automatically refreshes polygon configurations every 10 seconds without requiring restart.
-
-## Troubleshooting
-
-### X11 Display Issues (Linux)
-
-```bash
-# Allow Docker to access X11
-xhost +local:docker
-
-# Or set DISPLAY environment variable
-export DISPLAY=:0
-```
-
-### Camera Access Issues
-
-```bash
-# Check camera permissions
-ls -la /dev/video*
-
-# Add user to video group
-sudo usermod -a -G video $USER
-```
-
-### Database Connection Issues
-
-```bash
-# Check PostgreSQL logs
-make logs-db
-
-# Reset database
-make clean
-make up
-make setup
-```
-
-## License
-
-[Add your license information here]
